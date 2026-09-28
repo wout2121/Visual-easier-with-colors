@@ -14,7 +14,7 @@
                 <Label fx:id="title" text="Sparrow" styleClass="title-label" />
             </HBox>
             <Region HBox.hgrow="ALWAYS"/>
-            <DialogImage type="SPARROW" AnchorPane.rightAnchor="0"/>
+            <DialogImage fx:id="dialogImage" type="SPARROW" AnchorPane.rightAnchor="0"/>
         </HBox>
         <VBox spacing="10" styleClass="content-area">
             <Label text="Sparrow is een Bitcoin-wallet met als doel meer transparantie en gebruiksvriendelijkheid te bieden op weg naar volledige financiële zelfsoevereiniteit. Sparrow probeert alle details over je portemonneeconfiguratie, transacties en UTXO’s inzichtelijk te maken, zodat je transacties kan doen met volledig begrip van je geld.." wrapText="true" />

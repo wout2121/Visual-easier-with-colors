@@ -29,6 +29,7 @@ public class SettingsWalletForm extends WalletForm {
         this.walletCopy = currentWallet.copy();
         this.walletCopy.setMasterWallet(walletCopy.isMasterWallet() ? null : walletCopy.getMasterWallet().copy());
         this.appWalletForm = appWalletForm;
+        disposeRefreshNodes();
     }
 
     @Override
@@ -195,6 +196,10 @@ public class SettingsWalletForm extends WalletForm {
             }
 
             if(!Objects.equals(originalKeystore.getExtendedPublicKey(), changedKeystore.getExtendedPublicKey())) {
+                return true;
+            }
+
+            if(!Objects.equals(originalKeystore.getSilentPaymentScanAddress(), changedKeystore.getSilentPaymentScanAddress())) {
                 return true;
             }
         }
