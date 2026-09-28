@@ -25,8 +25,6 @@ import com.sparrowwallet.sparrow.io.Storage;
 import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
@@ -162,6 +160,17 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
         signature.setStyle("-fx-pref-height: 80px");
         signature.setWrapText(true);
         signature.setOnMouseClicked(event -> signature.selectAll());
+
+        ContextMenu signatureMenu = new ContextMenu();
+        MenuItem copyItem = new MenuItem("Copy");
+        copyItem.setOnAction(e -> signature.copy());
+        MenuItem pasteItem = new MenuItem("Paste");
+        pasteItem.setOnAction(e -> signature.paste());
+        MenuItem clearItem = new MenuItem("Clear");
+        clearItem.setOnAction(e -> signature.clear());
+        signatureMenu.getItems().addAll(copyItem, pasteItem, clearItem);
+        signature.setContextMenu(signatureMenu);
+
         signatureField.getInputs().add(signature);
 
         Field formatField = new Field();
@@ -297,8 +306,8 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
     }
 
     private void checkWalletSigning(Wallet wallet) {
-        if(wallet.getKeystores().size() != 1) {
-            throw new IllegalArgumentException("Cannot sign messages using a wallet with multiple keystores - a single key is required");
+        if(wallet.getKeystores().size() != 1 || (wallet.getPolicyType() != PolicyType.SINGLE_HD && wallet.getPolicyType() != PolicyType.SINGLE_SP)) {
+            throw new IllegalArgumentException("Cannot sign messages using this wallet type");
         }
     }
 
@@ -323,7 +332,7 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
     private boolean isValidAddress() {
         try {
             Address address = getAddress();
-            return address.getScriptType().isAllowed(PolicyType.SINGLE) || address.getScriptType() == ScriptType.P2SH;
+            return address.getScriptType().isAllowed(PolicyType.SINGLE_HD) || address.getScriptType() == ScriptType.P2SH;
         } catch (InvalidAddressException e) {
             return false;
         }
@@ -379,18 +388,22 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
     private void signUnencryptedKeystore(Wallet decryptedWallet) {
         try {
             Keystore keystore = decryptedWallet.getKeystores().getFirst();
-            ECKey privKey = keystore.getKey(walletNode);
             String signatureText;
-            if(isBip322()) {
-                ScriptType scriptType = decryptedWallet.getScriptType();
-                signatureText = Bip322.signMessageBip322(scriptType, message.getText().trim(), privKey);
+            if(decryptedWallet.getPolicyType() == PolicyType.SINGLE_SP) {
+                ECKey spendPrivKey = keystore.getSpendPrivateKey(Collections.emptyMap());
+                signatureText = Bip322.signMessageBip322Sp(walletNode.getAddress(), message.getText().trim(), spendPrivKey, walletNode.getSilentPaymentTweak());
             } else {
-                ScriptType scriptType = isElectrumSignatureFormat() ? ScriptType.P2PKH : decryptedWallet.getScriptType();
-                signatureText = privKey.signMessage(message.getText().trim(), scriptType);
+                ECKey privKey = keystore.getKey(walletNode);
+                if(isBip322()) {
+                    ScriptType scriptType = decryptedWallet.getScriptType();
+                    signatureText = Bip322.signMessageBip322(scriptType, message.getText().trim(), privKey);
+                } else {
+                    ScriptType scriptType = isElectrumSignatureFormat() ? ScriptType.P2PKH : decryptedWallet.getScriptType();
+                    signatureText = privKey.signMessage(message.getText().trim(), scriptType);
+                }
             }
             signature.clear();
             signature.appendText(signatureText);
-            privKey.clear();
         } catch(Exception e) {
             log.error("Could not sign message", e);
             AppServices.showErrorDialog("Could not sign message", e.getMessage());
@@ -466,11 +479,11 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
         if(scriptType == ScriptType.P2SH) {
             scriptType = ScriptType.P2SH_P2WPKH;
         }
-        if(!ScriptType.getScriptTypesForPolicyType(PolicyType.SINGLE).contains(scriptType)) {
+        if(!ScriptType.getScriptTypesForPolicyType(PolicyType.SINGLE_HD).contains(scriptType)) {
             throw new IllegalArgumentException("Only single signature P2PKH, P2SH-P2WPKH or P2WPKH addresses can verify messages.");
         }
 
-        Address signedMessageAddress = scriptType.getAddress(signedMessageKey);
+        Address signedMessageAddress = scriptType.getAddress(PolicyType.SINGLE_HD, signedMessageKey);
         return providedAddress.equals(signedMessageAddress);
     }
 
@@ -500,10 +513,7 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
 
     private void showBip322Qr() {
         Wallet signingWallet = walletNode.getWallet();
-        ScriptType scriptType = signingWallet.getScriptType();
-
-        PSBT psbt = Bip322.getBip322Psbt(scriptType, walletNode.getAddress(), message.getText().trim());
-        addBip322DerivationInfo(psbt, signingWallet);
+        PSBT psbt = buildBip322Psbt(signingWallet);
 
         byte[] psbtBytes = psbt.getForExport().serialize();
         CryptoPSBT cryptoPSBT = new CryptoPSBT(psbtBytes);
@@ -514,6 +524,40 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
         if(optButtonType.isPresent() && optButtonType.get().getButtonData() == ButtonBar.ButtonData.OK_DONE) {
             scanQr();
         }
+    }
+
+    private PSBT buildBip322Psbt(Wallet signingWallet) {
+        if(signingWallet.getPolicyType() == PolicyType.SINGLE_SP) {
+            Keystore keystore = signingWallet.getKeystores().getFirst();
+            ECKey spendPubKey = keystore.getSilentPaymentScanAddress().getSpendKey();
+            KeyDerivation spendDerivation = new KeyDerivation(keystore.getKeyDerivation().getMasterFingerprint(), KeyDerivation.writePath(KeyDerivation.getBip352SpendDerivation(keystore.getKeyDerivation().getDerivation())));
+            return Bip322.getBip322PsbtSp(walletNode.getAddress(), message.getText().trim(), walletNode.getSilentPaymentTweak(), Map.of(spendPubKey, spendDerivation));
+        }
+
+        PSBT psbt = Bip322.getBip322Psbt(signingWallet.getScriptType(), walletNode.getAddress(), message.getText().trim());
+        addBip322DerivationInfo(psbt, signingWallet);
+
+        return psbt;
+    }
+
+    private String extractBip322Signature(PSBT signedPsbt) {
+        String psbtMessage = signedPsbt.getGenericSignedMessage();
+        if(psbtMessage != null && !psbtMessage.equals(message.getText().trim())) {
+            Optional<ButtonType> response = AppServices.showWarningDialog("Message mismatch",
+                    "The message in the signed PSBT does not match the message in this dialog.\n\nPSBT message: " + psbtMessage +
+                            "\n\nContinue extracting the signature?", ButtonType.NO, ButtonType.YES);
+            if(response.isEmpty() || response.get() != ButtonType.YES) {
+                return null;
+            }
+        }
+
+        Wallet signingWallet = walletNode.getWallet();
+        if(signingWallet.getPolicyType() == PolicyType.SINGLE_SP) {
+            return Bip322.getBip322SignatureFromPsbtSp(signedPsbt);
+        }
+
+        ECKey pubKey = signingWallet.getKeystores().getFirst().getPubKey(walletNode);
+        return Bip322.getBip322SignatureFromPsbt(signingWallet.getScriptType(), signedPsbt, pubKey);
     }
 
     private void addBip322DerivationInfo(PSBT psbt, Wallet signingWallet) {
@@ -527,7 +571,7 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
             psbtInput.setTapInternalKey(pubKey);
             psbtInput.getTapDerivedPublicKeys().put(ECKey.fromPublicOnly(pubKey.getPubKeyXCoord()), Map.of(fullDerivation, Collections.emptyList()));
         } else {
-            psbtInput.getDerivedPublicKeys().put(scriptType.getOutputKey(pubKey), fullDerivation);
+            psbtInput.getDerivedPublicKeys().put(scriptType.getOutputKey(signingWallet.getPolicyType(), pubKey), fullDerivation);
         }
     }
 
@@ -539,11 +583,11 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
             QRScanDialog.Result result = optionalResult.get();
             if(result.psbt != null) {
                 try {
-                    Wallet signingWallet = walletNode.getWallet();
-                    ECKey pubKey = signingWallet.getKeystores().get(0).getPubKey(walletNode);
-                    String sig = Bip322.getBip322SignatureFromPsbt(signingWallet.getScriptType(), result.psbt, pubKey);
-                    signature.clear();
-                    signature.appendText(sig);
+                    String sig = extractBip322Signature(result.psbt);
+                    if(sig != null) {
+                        signature.clear();
+                        signature.appendText(sig);
+                    }
                 } catch(Exception e) {
                     log.error("Error extracting BIP-322 signature from PSBT", e);
                     AppServices.showErrorDialog("Error extracting signature", e.getMessage());
@@ -601,9 +645,7 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
 
     private void exportBip322File() {
         Wallet signingWallet = walletNode.getWallet();
-        ScriptType scriptType = signingWallet.getScriptType();
-        PSBT psbt = Bip322.getBip322Psbt(scriptType, walletNode.getAddress(), message.getText().trim());
-        addBip322DerivationInfo(psbt, signingWallet);
+        PSBT psbt = buildBip322Psbt(signingWallet);
 
         Stage window = new Stage();
         FileChooser fileChooser = new FileChooser();
@@ -644,10 +686,11 @@ public class MessageSignDialog extends Dialog<ButtonBar.ButtonData> {
                 try {
                     byte[] psbtBytes = Files.readAllBytes(file.toPath());
                     PSBT signedPsbt = new PSBT(psbtBytes, false);
-                    ECKey pubKey = walletNode.getWallet().getKeystores().get(0).getPubKey(walletNode);
-                    String sig = Bip322.getBip322SignatureFromPsbt(walletNode.getWallet().getScriptType(), signedPsbt, pubKey);
-                    signature.clear();
-                    signature.appendText(sig);
+                    String sig = extractBip322Signature(signedPsbt);
+                    if(sig != null) {
+                        signature.clear();
+                        signature.appendText(sig);
+                    }
                     return;
                 } catch(Exception e) {
                     if(file.getName().toLowerCase(Locale.ROOT).endsWith(".psbt")) {
