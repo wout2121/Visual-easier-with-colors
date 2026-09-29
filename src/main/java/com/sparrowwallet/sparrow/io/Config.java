@@ -63,6 +63,7 @@ public class Config {
     private Boolean suggestChangeWalletsDir;
     private File walletsDir;
     private List<File> recentWalletFiles;
+    private Map<String, String> walletColors;
     private Integer keyDerivationPeriod;
     private long dustAttackThreshold = DUST_ATTACK_THRESHOLD_SATS;
     private long dustAttackThresholdSp = DUST_ATTACK_THRESHOLD_SP_SATS;
@@ -443,6 +444,38 @@ public class Config {
 
     public void setRecentWalletFiles(List<File> recentWalletFiles) {
         this.recentWalletFiles = recentWalletFiles;
+        flush();
+    }
+
+    /**
+     * Returns the user chosen accent colour (hex, e.g. #3B82F6) for the given wallet file, or null when the default colour is used.
+     */
+    public String getWalletColor(File walletFile) {
+        if(walletFile == null || walletColors == null) {
+            return null;
+        }
+
+        return walletColors.get(walletFile.getAbsolutePath());
+    }
+
+    /**
+     * Stores the accent colour for the given wallet file. A null or empty colour resets the wallet to the default colour.
+     */
+    public void setWalletColor(File walletFile, String color) {
+        if(walletFile == null) {
+            return;
+        }
+
+        if(walletColors == null) {
+            walletColors = new LinkedHashMap<>();
+        }
+
+        if(color == null || color.isEmpty()) {
+            walletColors.remove(walletFile.getAbsolutePath());
+        } else {
+            walletColors.put(walletFile.getAbsolutePath(), color);
+        }
+
         flush();
     }
 

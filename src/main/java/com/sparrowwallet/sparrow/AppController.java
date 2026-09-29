@@ -297,6 +297,8 @@ private void changeAppTitle() {
 
     private final Map<File, File> renamedWallets = new HashMap<>();
 
+    private static final String DEFAULT_WALLET_COLOR = "#3DA0E3";
+
     private final ChangeListener<Boolean> serverToggleOnlineListener = (observable, oldValue, newValue) -> {
         Platform.runLater(() -> setServerToggleTooltip(getCurrentBlockHeight()));
     };
@@ -1831,6 +1833,8 @@ private void changeAppTitle() {
             TabData tabData = new WalletTabData(TabData.TabType.WALLET, walletForm);
             tab.setUserData(tabData);
             tab.setContextMenu(getTabContextMenu(tab));
+            tab.selectedProperty().addListener((observable, oldValue, newValue) -> applyWalletColor(tab));
+            applyWalletColor(tab);
             walletForm.lockedProperty().addListener((observable, oldValue, newValue) -> {
                 setSubTabsVisible(subTabs, !newValue && areSubTabsVisible());
             });
@@ -2447,14 +2451,141 @@ private void changeAppTitle() {
             });
             walletIcon.getItems().addAll(custom, reset);
 
+            Menu walletColor = getWalletColorMenu(tab, walletTabData);
+
             MenuItem delete = new MenuItem("Delete...");
             delete.setOnAction(event -> {
                 deleteWallet(walletTabData.getWalletForm());
             });
-            contextMenu.getItems().addAll(new SeparatorMenuItem(), walletIcon, delete);
+            contextMenu.getItems().addAll(new SeparatorMenuItem(), walletIcon, walletColor, delete);
         }
 
         return contextMenu;
+    }
+
+    private static final String[][] WALLET_COLORS = {
+            {"Blauw", "#2563EB"},
+            {"Groen", "#16A34A"},
+            {"Oranje", "#EA580C"},
+            {"Paars", "#9333EA"},
+            {"Rood", "#DC2626"},
+            {"Roze", "#DB2777"},
+            {"Turquoise", "#0D9488"},
+            {"Bruin", "#92400E"},
+            {"Grijs", "#4B5563"}
+    };
+
+    private Menu getWalletColorMenu(Tab tab, WalletTabData walletTabData) {
+        Menu walletColorMenu = new Menu("Portefeuillekleur");
+        ToggleGroup toggleGroup = new ToggleGroup();
+
+        for(String[] walletColor : WALLET_COLORS) {
+            RadioMenuItem colorItem = new RadioMenuItem(walletColor[0]);
+            colorItem.setToggleGroup(toggleGroup);
+            colorItem.setUserData(walletColor[1]);
+            colorItem.setGraphic(getColorSwatch(Color.web(walletColor[1])));
+            colorItem.setOnAction(event -> setWalletColor(tab, walletTabData, walletColor[1]));
+            walletColorMenu.getItems().add(colorItem);
+        }
+
+        MenuItem customColor = new MenuItem("Aangepast...");
+        customColor.setOnAction(event -> chooseCustomWalletColor(tab, walletTabData));
+
+        MenuItem resetColor = new MenuItem("Standaard");
+        resetColor.setOnAction(event -> setWalletColor(tab, walletTabData, null));
+
+        walletColorMenu.getItems().addAll(new SeparatorMenuItem(), customColor, resetColor);
+
+        walletColorMenu.setOnShowing(event -> {
+            String current = Config.get().getWalletColor(walletTabData.getStorage().getWalletFile());
+            toggleGroup.getToggles().forEach(toggle -> toggle.setSelected(current != null && current.equalsIgnoreCase((String)toggle.getUserData())));
+        });
+
+        return walletColorMenu;
+    }
+
+    private Node getColorSwatch(Color color) {
+        javafx.scene.shape.Circle circle = new javafx.scene.shape.Circle(6, color);
+        circle.setStroke(color.darker());
+        return circle;
+    }
+
+    private void chooseCustomWalletColor(Tab tab, WalletTabData walletTabData) {
+        String current = Config.get().getWalletColor(walletTabData.getStorage().getWalletFile());
+        ColorPicker colorPicker = new ColorPicker(Color.web(current == null ? DEFAULT_WALLET_COLOR : current));
+        colorPicker.setMaxWidth(Double.MAX_VALUE);
+
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.initOwner(rootStack.getScene().getWindow());
+        dialog.setTitle("Portefeuillekleur");
+        dialog.setHeaderText("Kies een kleur voor " + walletTabData.getWallet().getMasterName());
+        AppServices.setStageIcon(dialog.getDialogPane().getScene().getWindow());
+        dialog.getDialogPane().getStylesheets().add(AppServices.class.getResource("general.css").toExternalForm());
+        dialog.getDialogPane().setContent(colorPicker);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+
+        Optional<ButtonType> optButtonType = dialog.showAndWait();
+        if(optButtonType.isPresent() && optButtonType.get() == ButtonType.OK) {
+            setWalletColor(tab, walletTabData, toHex(colorPicker.getValue()));
+        }
+    }
+
+    private void setWalletColor(Tab tab, WalletTabData walletTabData, String color) {
+        Config.get().setWalletColor(walletTabData.getStorage().getWalletFile(), color);
+        applyWalletColor(tab);
+    }
+
+    private void applyWalletColor(Tab tab) {
+        if(!(tab.getUserData() instanceof WalletTabData walletTabData)) {
+            return;
+        }
+
+        String color = Config.get().getWalletColor(walletTabData.getStorage().getWalletFile());
+        Label tabLabel = tab.getGraphic() instanceof Label label ? label : null;
+
+        if(color == null) {
+            tab.setStyle(null);
+            if(tabLabel != null) {
+                tabLabel.setStyle(null);
+            }
+            if(tab.getContent() != null) {
+                tab.getContent().setStyle(null);
+            }
+            return;
+        }
+
+        Color accent;
+        try {
+            accent = Color.web(color);
+        } catch(IllegalArgumentException e) {
+            log.warn("Invalid wallet colour " + color + ", using default");
+            Config.get().setWalletColor(walletTabData.getStorage().getWalletFile(), null);
+            applyWalletColor(tab);
+            return;
+        }
+
+        //Selected tab shows the full colour, other tabs a lighter tint so the active wallet remains recognisable
+        Color background = tab.isSelected() ? accent : accent.interpolate(Color.WHITE, 0.45);
+        tab.setStyle("-fx-background-color: " + toHex(accent.darker()) + ", " + toHex(background) + ";" +
+                "-fx-background-insets: 0 1 0 0, 1 2 0 1;" +
+                "-fx-background-radius: 3 3 0 0, 2 2 0 0;");
+
+        if(tabLabel != null) {
+            tabLabel.setStyle("-fx-text-fill: " + (getLuminance(background) > 0.55 ? "#1f2328" : "white") + ";");
+        }
+
+        //Colour the wallet side menu with the same accent colour
+        if(tab.getContent() != null) {
+            tab.getContent().setStyle("-wallet-accent: " + toHex(accent) + "; -wallet-subtab-accent: " + toHex(accent) + ";");
+        }
+    }
+
+    private static double getLuminance(Color color) {
+        return 0.2126 * color.getRed() + 0.7152 * color.getGreen() + 0.0722 * color.getBlue();
+    }
+
+    private static String toHex(Color color) {
+        return String.format("#%02X%02X%02X", (int)Math.round(color.getRed() * 255), (int)Math.round(color.getGreen() * 255), (int)Math.round(color.getBlue() * 255));
     }
 
     private void setCustomIcon(Wallet wallet) {
@@ -2503,6 +2634,12 @@ private void changeAppTitle() {
 
             Storage.CopyWalletService copyWalletService = new Storage.CopyWalletService(selectedWalletForm.getWallet(), walletFile);
             copyWalletService.setOnSucceeded(event -> {
+                File previousWalletFile = selectedWalletForm.getStorage().getWalletFile();
+                String walletColor = Config.get().getWalletColor(previousWalletFile);
+                if(walletColor != null) {
+                    Config.get().setWalletColor(walletFile, walletColor);
+                    Config.get().setWalletColor(previousWalletFile, null);
+                }
                 renamedWallets.put(walletFile, selectedWalletForm.getStorage().getWalletFile());
                 tabs.getTabs().remove(tabs.getSelectionModel().getSelectedItem());
                 openWalletFile(walletFile, true);
@@ -2565,6 +2702,9 @@ private void changeAppTitle() {
                 deleteWalletService.setPeriod(Duration.hours(1));
                 deleteWalletService.setOnSucceeded(event -> {
                     deleteWalletService.cancel();
+                    if(deleteWalletService.getValue()) {
+                        Config.get().setWalletColor(storage.getWalletFile(), null);
+                    }
                     if(!deleteWalletService.getValue()) {
                         showErrorDialog("Error deleting wallet", "Could not delete " + storage.getWalletFile().getName()  + ". Please delete this file manually.");
                     }

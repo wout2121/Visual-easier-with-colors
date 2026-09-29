@@ -1,3 +1,9 @@
+/* Per-wallet accent colour (Visual easier with colors). Overridden inline per wallet tab. */
+.root {
+    -wallet-accent: #3da0e3;
+    -wallet-subtab-accent: #3da0e3;
+}
+
 .background-box {
     -fx-stroke: #a0a1a7;
     -fx-stroke-width: 1px;
@@ -56,12 +62,12 @@
     -fx-pref-height: 50;
     -fx-pref-width: 90;
     -fx-alignment: CENTER;
-    -fx-background-color: derive(#3da0e3, 32%);
+    -fx-background-color: derive(-wallet-subtab-accent, 32%);
     -fx-background-insets: 0 1 0 1,0,0;
 }
 
 .wallet-subtabs > .tab-header-area .tab:selected {
-    -fx-background-color: #3da0e3;
+    -fx-background-color: -wallet-subtab-accent;
 }
 
 .wallet-subtabs > .tab-header-area .tab-label {
